@@ -2,6 +2,11 @@ name: Build shared macOS Qt
 
 on:
   workflow_dispatch:
+    inputs:
+      source-run-id:
+        description: 'Optional successful GoldenNugget run to import instead of compiling Qt'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -27,21 +32,36 @@ jobs:
           sudo installer -pkg "$RUNNER_TEMP/python.pkg" -target /
           /Library/Frameworks/Python.framework/Versions/3.15/bin/python3.15 -m venv .qt-env
           echo "$GITHUB_WORKSPACE/.qt-env/bin" >> "$GITHUB_PATH"
+      - name: Import existing GoldenNugget wheels
+        if: inputs.source-run-id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+        run: |
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          gh run view "$SOURCE_RUN_ID" --repo GoldenNugget-Team/GoldenNugget \
+            --json conclusion --jq .conclusion | grep -qx success
+          gh run download "$SOURCE_RUN_ID" --repo GoldenNugget-Team/GoldenNugget \
+            --name macOS-Qt-universal2 --dir .macos-qt-wheels
       - uses: actions/cache@v4
+        if: inputs.source-run-id == ''
         id: qt-cache
         with:
           path: .macos-qt-wheels
           key: qt-universal2-macos26-v1-6.12.0-python-3.15.0-macos14.4-${{ hashFiles('tools/*.py', 'tools/build_macos_qt.sh') }}
       - name: Compile Qt and Python bindings
-        if: steps.qt-cache.outputs.cache-hit != 'true'
+        if: inputs.source-run-id == '' && steps.qt-cache.outputs.cache-hit != 'true'
         run: bash tools/build_macos_qt.sh
       - name: Verify and smoke test wheels
         run: |
           python -m pip install --upgrade pip packaging wheel
+          python tools/normalize_macos_wheels.py .macos-qt-wheels/*.whl
           python tools/verify_macos_wheels.py .macos-qt-wheels
           python -m pip install --no-deps .macos-qt-wheels/*.whl
           python -m pip check
           QT_QPA_PLATFORM=offscreen python tools/smoke_qt.py
+          softwareupdate --install-rosetta --agree-to-license
+          QT_QPA_PLATFORM=offscreen arch -x86_64 .qt-env/bin/python tools/smoke_qt.py
           cd .macos-qt-wheels
           shasum -a 256 ./*.whl > SHA256SUMS.txt
       - uses: actions/upload-artifact@v6
@@ -74,5 +94,5 @@ jobs:
           gh release create "$QT_RELEASE" wheels/* \
             --target "$GITHUB_SHA" \
             --title 'Qt 6.12.0 / Python 3.15 / macOS Universal2 (v1)' \
-            --notes 'PySide6 and Shiboken6 for arm64 + x86_64, macOS 14.4+. Modules: Core, Gui, Widgets, Network, Svg. SHA256SUMS.txt covers all wheels.'
+            --notes 'Built or imported and verified by the Build shared macOS Qt workflow. PySide6 and Shiboken6 for arm64 + x86_64, macOS 14.4+. Modules: Core, Gui, Widgets, Network, Svg. SHA256SUMS.txt covers all wheels.'
 
