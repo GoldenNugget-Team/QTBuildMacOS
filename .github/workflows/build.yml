@@ -1,0 +1,78 @@
+name: Build shared macOS Qt
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-macos-qt
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Qt 6.12 / Python 3.15 / Universal2
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.4'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install universal Python 3.15
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/python.pkg" \
+            https://www.python.org/ftp/python/3.15.0/python-3.15.0-macos11.pkg
+          pkgutil --check-signature "$RUNNER_TEMP/python.pkg"
+          sudo installer -pkg "$RUNNER_TEMP/python.pkg" -target /
+          /Library/Frameworks/Python.framework/Versions/3.15/bin/python3.15 -m venv .qt-env
+          echo "$GITHUB_WORKSPACE/.qt-env/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        id: qt-cache
+        with:
+          path: .macos-qt-wheels
+          key: qt-universal2-macos26-v1-6.12.0-python-3.15.0-macos14.4-${{ hashFiles('tools/*.py', 'tools/build_macos_qt.sh') }}
+      - name: Compile Qt and Python bindings
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        run: bash tools/build_macos_qt.sh
+      - name: Verify and smoke test wheels
+        run: |
+          python -m pip install --upgrade pip packaging wheel
+          python tools/verify_macos_wheels.py .macos-qt-wheels
+          python -m pip install --no-deps .macos-qt-wheels/*.whl
+          python -m pip check
+          QT_QPA_PLATFORM=offscreen python tools/smoke_qt.py
+          cd .macos-qt-wheels
+          shasum -a 256 *.whl > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macOS-Qt-universal2
+          include-hidden-files: true
+          path: .macos-qt-wheels/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      QT_RELEASE: qt-6.12.0-python-3.15-macos-14.4-v1
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: macOS-Qt-universal2
+          path: wheels
+      - name: Publish shared wheels
+        run: |
+          if gh release view "$QT_RELEASE" >/dev/null 2>&1; then
+            echo 'This wheel version is already published. Bump the release tag before publishing new binaries.'
+            exit 1
+          fi
+          gh release create "$QT_RELEASE" wheels/* \
+            --target "$GITHUB_SHA" \
+            --title 'Qt 6.12.0 / Python 3.15 / macOS Universal2 (v1)' \
+            --notes 'PySide6 and Shiboken6 for arm64 + x86_64, macOS 14.4+. Modules: Core, Gui, Widgets, Network, Svg. SHA256SUMS.txt covers all wheels.'
+

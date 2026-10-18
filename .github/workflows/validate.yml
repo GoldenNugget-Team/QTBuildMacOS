@@ -1,0 +1,25 @@
+name: Validate build configuration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Validate workflows and scripts
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint
+          bash -n tools/build_macos_qt.sh
+          python3 -m compileall -q tools
