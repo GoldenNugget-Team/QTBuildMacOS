@@ -43,7 +43,7 @@ jobs:
           python -m pip check
           QT_QPA_PLATFORM=offscreen python tools/smoke_qt.py
           cd .macos-qt-wheels
-          shasum -a 256 *.whl > SHA256SUMS.txt
+          shasum -a 256 ./*.whl > SHA256SUMS.txt
       - uses: actions/upload-artifact@v6
         with:
           name: macOS-Qt-universal2
